@@ -16,10 +16,12 @@ from mailtrace.parsing import (
     build_share_report,
     check_arc_chain,
     compare_headers,
+    inspect_dsn,
     split_batch_headers,
     thread_analysis,
 )
 from mailtrace.parsing.sample import (
+    SAMPLE_DSN,
     SAMPLE_HEADERS,
     SAMPLE_HEADERS_ALIGN,
     SAMPLE_HEADERS_ARC,
@@ -63,6 +65,7 @@ def create_app() -> Flask:
             "sample_trusted_hosts": SAMPLE_TRUSTED_HOSTS,
             "sample_authres": SAMPLE_HEADERS_AUTHRES,
             "sample_align": SAMPLE_HEADERS_ALIGN,
+            "sample_dsn": SAMPLE_DSN,
             "sample_org_domain": SAMPLE_ORG_DOMAIN,
             "max_input_kb": max_input_kb,
         }
@@ -179,6 +182,17 @@ def create_app() -> Flask:
                 "（包含 From、Authentication-Results 与 Received 字段）"
             }
         return audit_sender_alignment(raw_headers, trusted_hosts, org_domain, mode)
+
+    def _do_dsn_inspect(raw_source: str) -> dict:
+        error = _check_size(raw_source)
+        if error:
+            return {"error": error}
+        if not raw_source.strip():
+            return {
+                "error": "请先粘贴完整原始退信回执邮件"
+                "（含 message/delivery-status 投递状态部分）"
+            }
+        return inspect_dsn(raw_source)
 
     @app.post("/analyze")
     def analyze_form():
@@ -299,6 +313,12 @@ def create_app() -> Flask:
             align_mode_selected=mode,
             align=align,
         )
+
+    @app.post("/dsn-inspect")
+    def dsn_inspect_form():
+        raw_source = request.form.get("source_dsn", "")
+        dsn = _do_dsn_inspect(raw_source)
+        return render_index(source_dsn=raw_source, dsn=dsn)
 
     @app.post("/api/analyze")
     def analyze_api():
@@ -502,6 +522,24 @@ def create_app() -> Flask:
         result = _do_sender_alignment(raw_headers, trusted_hosts, org_domain, mode)
         # 空名单、非法模式、宽松缺组织域、空白头部等输入错误为 400；
         # no_received / untrusted_top / 证据不足等分析结论为 200
+        status = 400 if result.get("error") else 200
+        return jsonify(result), status
+
+    @app.post("/api/dsn/inspect")
+    def dsn_inspect_api():
+        if not request.is_json:
+            return jsonify(
+                {"error": "请使用 application/json 提交 {\"source\": \"完整原始退信邮件\"}"}
+            ), 400
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "请求体必须是 JSON 对象，含 source 字符串"}), 400
+        source = payload.get("source", "")
+        if not isinstance(source, str):
+            return jsonify({"error": "source 必须是字符串（完整原始退信邮件）"}), 400
+        result = _do_dsn_inspect(source)
+        # 空白、超限、无 message/delivery-status 部分均为 400；
+        # 逐收件人的成功 / 暂缓 / 永久失败 / 待核对均为 200
         status = 400 if result.get("error") else 200
         return jsonify(result), status
 

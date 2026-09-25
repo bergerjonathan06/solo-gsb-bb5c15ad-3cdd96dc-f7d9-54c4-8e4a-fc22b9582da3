@@ -6,6 +6,7 @@ from .authres import analyze_auth_results
 from .batch import BATCH_DELIMITER, batch_delay_analysis, split_batch_headers
 from .compare import compare_headers
 from .dkim import audit_dkim_coverage
+from .dsn import inspect_dsn
 from .parser import analyze_headers, parse_header_blocks
 from .share import build_share_report
 from .thread import thread_analysis
@@ -22,6 +23,7 @@ __all__ = [
     "build_share_report",
     "check_arc_chain",
     "compare_headers",
+    "inspect_dsn",
     "parse_header_blocks",
     "parse_trusted_hosts",
     "split_batch_headers",

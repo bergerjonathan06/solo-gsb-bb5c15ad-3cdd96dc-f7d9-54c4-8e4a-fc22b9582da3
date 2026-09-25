@@ -333,6 +333,84 @@ Message-ID: <align-demo@mail.partner.example>
 SAMPLE_ORG_DOMAIN = "partner.example"
 
 
+# 退信回执（DSN）判读示例：一封完整的 multipart/report 原始退信邮件，
+# 含 text/plain 人类可读说明、message/delivery-status 投递状态与
+# message/rfc822 原信副本。投递状态部分有 4 个收件人报告块，按原文顺序：
+# - gone@example.com：Action=failed + Status=5.1.1 → 永久失败；
+# - retry@example.com：Action=delayed + Status=4.7.1 → 暂缓；
+# - delivered@example.com：Action=delivered + Status=2.0.0 → 成功；
+# - weird@example.com：Action=failed 但 Status=4.4.1（类别 4 与 failed
+#   矛盾）→ 待核对，不把整封回执判成单一“退信”。
+SAMPLE_DSN = """\
+Received: by mx.final.example with ESMTPS id B7E9C2
+\tfor <multi@final.example>; Fri, 25 Sep 2026 04:00:10 +0000
+Return-Path: <>
+Date: Fri, 25 Sep 2026 04:00:10 +0000
+From: Mail Delivery System <mailer-daemon@mx.final.example>
+To: <sender@origin.example>
+Subject: Warning: message could not be delivered for some recipients
+Auto-Submitted: auto-replied
+Content-Type: multipart/report; report-type=delivery-status;
+\tboundary="DSNBOUND"
+
+--DSNBOUND
+Content-Type: text/plain; charset="utf-8"
+
+This is a MIME-formatted delivery status notification.
+One recipient failed permanently, one is still being retried,
+one was delivered, and one report has conflicting fields.
+
+--DSNBOUND
+Content-Type: message/delivery-status
+
+Reporting-MTA: dns;mx.final.example
+X-Postfix-Queue-ID: B7E9C2
+Arrival-Date: Fri, 25 Sep 2026 03:58:02 +0000
+
+Final-Recipient: rfc822; gone@final.example
+Original-Recipient: rfc822;user@final.example
+Action: failed
+Status: 5.1.1
+Remote-MTA: dns;mailstore.final.example
+Diagnostic-Code: smtp;550 5.1.1 <gone@final.example> user doesn't exist
+\t(permanent delivery failure, no more retries)
+
+Final-Recipient: rfc822; retry@final.example
+Action: delayed
+Status: 4.7.1
+Remote-MTA: dns;mailstore.final.example
+Diagnostic-Code: smtp;450 4.7.1 mailbox temporarily busy; will retry
+Last-Attempt-Date: Fri, 25 Sep 2026 03:59:30 +0000
+Will-Retry-Until: Fri, 25 Sep 2026 08:00:00 +0000
+
+Final-Recipient: rfc822; delivered@final.example
+Action: delivered
+Status: 2.0.0
+Diagnostic-Code: smtp;250 2.0.0 message accepted for delivery
+
+Final-Recipient: rfc822; weird@final.example
+Action: failed
+Status: 4.4.1
+Diagnostic-Code: smtp;421 4.4.1 connection timed out (but Action says failed?)
+
+--DSNBOUND
+Content-Type: message/rfc822
+Content-Disposition: inline
+
+Received: by mx.final.example with ESMTP id A1B2C3
+\tfor <multi@final.example>; Fri, 25 Sep 2026 03:58:00 +0000
+From: Sender <sender@origin.example>
+To: gone@final.example, retry@final.example,
+ delivered@final.example, weird@final.example
+Subject: original message copy follows
+Message-ID: <orig-msg-001@origin.example>
+
+original message body...
+
+--DSNBOUND--
+"""
+
+
 # 邮件会话关系示例：多封邮件用页面规范分隔行分开，覆盖
 # - 正常会话树：#1（根）<- #2 <- #3，#3 的 References 跨两封且带折行，
 #   按“末项”连到 #2；#4 缺失 In-Reply-To，回退 References 末项连到 #2；

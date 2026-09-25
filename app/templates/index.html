@@ -389,6 +389,52 @@
   .idlist .inb { color: var(--ok); }
   .idlist .out { color: var(--warn); }
   .idlist .amb { color: var(--error); }
+
+  /* 退信回执 DSN 判读 */
+  .btn-dsn { background: #fb7185; color: #4c0519; }
+  .dsn-list { margin-top: 10px; display: grid; gap: 10px; }
+  .dsn-row {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 12px 16px;
+  }
+  .dsn-row.success { border-left: 4px solid var(--ok); }
+  .dsn-row.deferred { border-left: 4px solid var(--warn); }
+  .dsn-row.permanent { border-left: 4px solid var(--error); }
+  .dsn-row.review {
+    border-left: 4px solid #a78bfa;
+    background: rgba(167, 139, 250, 0.07);
+  }
+  .dsn-badge {
+    display: inline-block; border-radius: 999px; padding: 1px 10px;
+    font-size: 12px; font-weight: 700; white-space: nowrap;
+  }
+  .dsn-badge.success { background: var(--ok); color: #052e1b; }
+  .dsn-badge.deferred { background: var(--warn); color: #422006; }
+  .dsn-badge.permanent { background: var(--error); color: #450a0a; }
+  .dsn-badge.review { background: #a78bfa; color: #2e1065; }
+  .dsn-addr {
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 13.5px; word-break: break-all;
+  }
+  .dsn-fields {
+    display: grid; gap: 4px 24px; margin: 8px 0 4px;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    font-size: 13px;
+  }
+  .dsn-fields .k { color: var(--muted); margin-right: 6px; }
+  .dsn-fields code { font-size: 12px; }
+  .dsn-diag {
+    margin-top: 8px; border-radius: 8px; padding: 8px 12px;
+    font-size: 12.5px; background: #0b1220; border: 1px solid var(--line);
+    white-space: pre-wrap; word-break: break-all;
+  }
+  .dsn-diag .k { color: var(--muted); margin-right: 6px; }
+  .dsn-reasons { list-style: none; padding: 0; margin: 8px 0 0; }
+  .dsn-reasons li {
+    border-radius: 8px; padding: 7px 12px; margin-top: 6px;
+    font-size: 13px; background: #2e1065; color: #ddd6fe;
+    border: 1px solid #6d28d9;
+  }
 </style>
 </head>
 <body>
@@ -587,6 +633,28 @@
       <button class="btn-thread" type="submit">分析会话关系（多封）</button>
       <button class="btn-ghost" type="button" id="fillThreadSample">填入 12 封示例</button>
       <button class="btn-ghost" type="button" id="clearThread">清空</button>
+    </div>
+  </form>
+
+  <h2 class="section-title">📬 退信回执判读（DSN / Delivery Status Notification）</h2>
+  <p class="subtitle" style="margin-bottom:10px;">
+    粘贴<strong>完整原始退信邮件</strong>（含 <code>message/delivery-status</code>
+    投递状态部分的 <code>multipart/report</code>，不是只有退信文字说明或原信头部）。
+    系统用 Python 标准库解析 MIME，<strong>只读取投递状态部分</strong>，按各收件人报告块
+    <strong>原有顺序</strong>提取 <code>Final-Recipient</code> / <code>Action</code> /
+    <code>Status</code> / <code>Diagnostic-Code</code>，并以 <code>Status</code>
+    的首位类别逐个判定：<code>2.x.x</code> 成功、<code>4.x.x</code> 暂缓、
+    <code>5.x.x</code> 永久失败；<code>Status</code> 缺失或与 <code>Action</code>
+    矛盾的收件人单独标为<strong>待核对</strong>，不会把整封回执归为单一结果。
+  </p>
+  <form method="post" action="/dsn-inspect" id="dsnForm">
+    <textarea name="source_dsn" id="source_dsn" style="min-height:260px;"
+      placeholder="完整原始退信邮件，例如：&#10;From: Mail Delivery System &lt;mailer-daemon@mx.example&gt;&#10;Content-Type: multipart/report; report-type=delivery-status; boundary=...&#10;...&#10;Content-Type: message/delivery-status&#10;&#10;Reporting-MTA: dns;mx.example&#10;&#10;Final-Recipient: rfc822; user@example.com&#10;Action: failed&#10;Status: 5.1.1&#10;Diagnostic-Code: smtp;550 user unknown">{{ source_dsn or '' }}</textarea>
+    <div class="toolbar">
+      <button class="btn-dsn" type="submit">判读退信回执</button>
+      <button class="btn-ghost" type="button" id="fillDsnSample">填入示例</button>
+      <button class="btn-ghost" type="button" id="clearDsn">清空</button>
+      <span class="hint" style="align-self:center;">也可调用 <code>POST /api/dsn/inspect</code>（JSON：<code>{"source": "..."}</code>）</span>
     </div>
   </form>
 
@@ -1414,6 +1482,104 @@
     {% endif %}
   {% endif %}
 
+  {% if dsn %}
+    {% if dsn.error %}
+      <div class="banner">{{ dsn.error }}</div>
+    {% else %}
+      <h2 style="font-size:18px;">退信回执判读结果（按收件人报告块原有顺序）</h2>
+      <div class="stats">
+        <div class="stat"><div class="num">{{ dsn.recipient_count }}</div><div class="label">收件人报告块</div></div>
+        <div class="stat"><div class="num ok">{{ dsn.success_count }}</div><div class="label">成功（Status 2.x.x）</div></div>
+        <div class="stat"><div class="num warn">{{ dsn.deferred_count }}</div><div class="label">暂缓（Status 4.x.x）</div></div>
+        <div class="stat"><div class="num error">{{ dsn.permanent_count }}</div><div class="label">永久失败（Status 5.x.x）</div></div>
+        <div class="stat"><div class="num {% if dsn.review_count %}error{% endif %}" style="color:#a78bfa;">{{ dsn.review_count }}</div><div class="label">待核对（缺失 / 矛盾）</div></div>
+        <div class="stat"><div class="num">{{ dsn.dsn_part_count }}</div><div class="label">投递状态部分（message/delivery-status）</div></div>
+      </div>
+
+      {% if dsn.envelope_blocks %}
+      <div class="card">
+        <h2>📨 信封级字段（每消息报告块）</h2>
+        <div class="dsn-fields">
+          {% for env in dsn.envelope_blocks %}
+          <div>
+            {% if dsn.envelope_count > 1 %}<div><span class="k">投递状态部分 #{{ env.dsn_part }}</span></div>{% endif %}
+            {% if env.reporting_mta %}<div><span class="k">Reporting-MTA</span><code>{{ env.reporting_mta }}</code></div>{% endif %}
+            {% if env.arrival_date %}<div><span class="k">Arrival-Date</span>{{ env.arrival_date }}</div>{% endif %}
+            <details>
+              <summary>该字段块全部字段（{{ env.fields | length }}）</summary>
+              <pre class="raw">{% for f in env.fields %}{{ f.name }}: {{ f.value }}
+{% endfor %}</pre>
+            </details>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      <div class="dsn-list">
+        {% for r in dsn.recipients %}
+        <div class="dsn-row {{ r.result }}">
+          <div class="hop-head">
+            <span class="trust-idx">#{{ r.index }}</span>
+            <span class="dsn-badge {{ r.result }}" title="{{ r.result_label }}">
+              {%- if r.result == 'success' %}✅ 成功
+              {%- elif r.result == 'deferred' %}⏳ 暂缓
+              {%- elif r.result == 'permanent' %}⛔ 永久失败
+              {%- else %}🔍 待核对{% endif -%}
+            </span>
+            <span class="hint">{{ r.result_label }}</span>
+            <span class="dsn-addr">{{ r.final_recipient if r.final_recipient else '（未解析到收件人地址）' }}</span>
+            {% if dsn.dsn_part_count > 1 %}<span class="hint">投递状态部分 #{{ r.dsn_part }}</span>{% endif %}
+            {% if r.recipient_type %}<span class="hint">地址类型：{{ r.recipient_type }}</span>{% endif %}
+          </div>
+          <div class="dsn-fields">
+            <div><span class="k">Final-Recipient</span>
+              {% if r.final_recipient %}<code>{{ r.final_recipient_raw }}</code>
+              {% else %}<span class="time-bad">缺失</span>{% endif %}
+            </div>
+            <div><span class="k">Action</span>
+              {% if r.action %}<code>{{ r.action_raw }}</code>
+              {% else %}<span class="time-bad">缺失</span>{% endif %}
+            </div>
+            <div><span class="k">Status</span>
+              {% if r.status %}<code>{{ r.status }}</code>
+                <span class="hint">类别 {{ r.status_class }}（{{ '成功' if r.status_class == '2' else '暂缓' if r.status_class == '4' else '永久失败' }}）</span>
+              {% else %}<span class="time-bad">缺失 / 无法识别</span>{% endif %}
+            </div>
+            {% if r.reporting_mta %}<div><span class="k">Reporting-MTA</span><code>{{ r.reporting_mta }}</code></div>{% endif %}
+          </div>
+
+          {% if r.review_reasons %}
+          <ul class="dsn-reasons">
+            {% for reason in r.review_reasons %}<li>🔍 {{ reason }}</li>{% endfor %}
+          </ul>
+          {% endif %}
+
+          {% if r.notes %}
+          <ul class="anomalies">
+            {% for note in r.notes %}<li class="warn">⚠️ {{ note }}</li>{% endfor %}
+          </ul>
+          {% endif %}
+
+          <div class="dsn-diag">
+            <span class="k">Diagnostic-Code{% if r.diagnostic_type %}（{{ r.diagnostic_type }}）{% endif %}：</span>
+            {% if r.diagnostic_code %}{{ r.diagnostic_raw }}
+            {% else %}<span style="color:var(--muted);">该收件人报告块未提供 Diagnostic-Code</span>{% endif %}
+          </div>
+
+          <details>
+            <summary>查看该收件人报告块原文（保留折行）</summary>
+            <pre class="raw">{{ r.raw_block }}</pre>
+          </details>
+        </div>
+        {% endfor %}
+      </div>
+
+      <p class="legend">{{ dsn.notice }} 仅 <code>message/delivery-status</code> 部分参与判读；
+        <code>text/plain</code> 退信说明与 <code>message/rfc822</code> 原信副本不参与。</p>
+    {% endif %}
+  {% endif %}
+
   {% if compare %}
     {% if compare.error %}
       <div class="banner">{{ compare.error }}</div>
@@ -1613,6 +1779,15 @@
   document.getElementById('clearThread').addEventListener('click', () => {
     taThread.value = '';
     taThread.focus();
+  });
+
+  const taDsn = document.getElementById('source_dsn');
+  document.getElementById('fillDsnSample').addEventListener('click', () => {
+    taDsn.value = {{ sample_dsn | tojson }};
+  });
+  document.getElementById('clearDsn').addEventListener('click', () => {
+    taDsn.value = '';
+    taDsn.focus();
   });
 
   const taArc = document.getElementById('headers_arc');
