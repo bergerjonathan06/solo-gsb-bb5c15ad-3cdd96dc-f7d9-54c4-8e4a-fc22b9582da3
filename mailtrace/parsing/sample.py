@@ -429,3 +429,69 @@ Date: Fri, 25 Sep 2026 03:10:00 +0000
 Subject: Cycle case B
 """
 
+
+# 退信回执（DSN）示例：一封完整的 multipart/report 退信邮件，
+# message/delivery-status 部分含 4 个收件人报告块，覆盖四种判定：
+# - alice：Action=failed + Status 5.1.1 → 永久失败；
+# - bob：Action=delayed + Status 4.4.1 → 暂缓；
+# - carol：Action=delivered + Status 2.0.0 → 成功；
+# - dave：Action=failed 却配 Status 2.0.0 → 与 Action 矛盾，待核对。
+SAMPLE_DSN = """\
+From: MAILER-DAEMON@mx.provider.example
+To: sender@example.com
+Subject: Undelivered Mail Returned to Sender
+Date: Thu, 24 Sep 2026 03:05:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/report; report-type=delivery-status;
+\tboundary="dsn-demo-boundary"
+
+--dsn-demo-boundary
+Content-Type: text/plain; charset=us-ascii
+
+This is the human-readable explanation. It is NOT parsed by the inspector.
+
+--dsn-demo-boundary
+Content-Type: message/delivery-status
+
+Reporting-MTA: dns; mx.provider.example
+X-Postfix-Queue-ID: 3F1A2B9C4D
+Arrival-Date: Thu, 24 Sep 2026 03:04:05 +0000
+
+Final-Recipient: rfc822; alice@dest.example
+Original-Recipient: rfc822; alice@dest.example
+Action: failed
+Status: 5.1.1
+Diagnostic-Code: smtp; 550 5.1.1 <alice@dest.example>: Recipient address
+ rejected: User unknown in virtual mailbox table
+
+Final-Recipient: rfc822; bob@slow.example
+Original-Recipient: rfc822; bob@slow.example
+Action: delayed
+Status: 4.4.1
+Diagnostic-Code: smtp; 454 4.4.1 <bob@slow.example>: connect to
+ slow.example[203.0.113.99]:25: Connection timed out
+
+Final-Recipient: rfc822; carol@ok.example
+Original-Recipient: rfc822; carol@ok.example
+Action: delivered
+Status: 2.0.0
+Diagnostic-Code: smtp; 250 2.0.0 Ok: queued as 9F1C2E
+
+Final-Recipient: rfc822; dave@conflict.example
+Original-Recipient: rfc822; dave@conflict.example
+Action: failed
+Status: 2.0.0
+Diagnostic-Code: smtp; 250 2.0.0 Ok but flagged failed by filter
+
+--dsn-demo-boundary
+Content-Type: message/rfc822
+
+From: sender@example.com
+To: alice@dest.example, bob@slow.example, carol@ok.example,
+ dave@conflict.example
+Subject: quarterly report
+Date: Thu, 24 Sep 2026 03:04:00 +0000
+
+(original message body omitted in demo)
+--dsn-demo-boundary--
+"""

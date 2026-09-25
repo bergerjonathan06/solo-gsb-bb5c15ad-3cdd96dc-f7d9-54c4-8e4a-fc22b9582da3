@@ -89,6 +89,15 @@
   **未见对齐证据**；其余（无本组织声明、无 pass、pass 缺身份域、From
   重复 / 缺域等）→ **证据不足**。逐条展示方法、声明字段位置、接收跳、
   身份域及比较结果；**重复 From、缺失域绝不静默择一**。
+- **退信回执判读（DSN / message/delivery-status）**：页面粘贴**完整原始
+  退信邮件**（含 MIME 正文），或调用 `POST /api/dsn/inspect`
+  （`source` 字符串）。系统只用 Python 标准库解析 MIME，并**只读取
+  `message/delivery-status` 部分**（RFC 3464），按收件人报告块原有顺序
+  提取 `Final-Recipient` / `Action` / `Status` / `Diagnostic-Code`；
+  以 `Status` 类别码逐收件人标记 **2.x 成功、4.x 暂缓、5.x 永久失败**，
+  `Status` 缺失 / 无法解析或与 `Action` 矛盾时标为**待核对**并说明原因。
+  每个收件人独立判定，**不把整封回执归为单一结果**；没有投递状态部分时
+  给出明确错误。
 
 解析核心（`mailtrace/`）仅依赖 Python 标准库，可脱离 Flask 单独使用或被其他程序导入。
 
@@ -128,7 +137,7 @@ docker build -t mailtrace . && docker run --rm -p 8000:8000 mailtrace
 
 | 用途 | 地址（默认 `http://localhost:8000`） |
 | --- | --- |
-| 页面（投递路径 / 对照 / 慢段归因 / 会话关系 / ARC / DKIM 覆盖 / 可信边界 / 认证结果来源 / 发件域对齐） | `http://localhost:8000/` |
+| 页面（投递路径 / 对照 / 慢段归因 / 会话关系 / ARC / DKIM 覆盖 / 可信边界 / 认证结果来源 / 发件域对齐 / 退信回执判读） | `http://localhost:8000/` |
 | 单份头部分析 | `POST http://localhost:8000/api/analyze` |
 | 脱敏分享报告 | `POST http://localhost:8000/api/analyze/share` |
 | **接收链可信边界** | `POST http://localhost:8000/api/analyze/trust-boundary` |
@@ -139,6 +148,7 @@ docker build -t mailtrace . && docker run --rm -p 8000:8000 mailtrace
 | **邮件会话关系（引用树）** | `POST http://localhost:8000/api/thread-relations` |
 | ARC 链结构检查 | `POST http://localhost:8000/api/arc/check` |
 | **DKIM 头字段覆盖审计** | `POST http://localhost:8000/api/dkim/coverage` |
+| **退信回执判读** | `POST http://localhost:8000/api/dsn/inspect` |
 | 健康检查 | `GET http://localhost:8000/healthz` |
 
 ---
@@ -202,6 +212,14 @@ docker build -t mailtrace . && docker run --rm -p 8000:8000 mailtrace
     其下展示 From 域解析卡片与每条本组织 `spf` / `dkim` 声明的
     方法、声明字段位置、接收跳、身份域与比较结果；重复 From 字段、
     单字段多地址、缺地址 / 缺域时明确提示并判定证据不足，绝不静默择一。
+12. 需要判读**退信回执**时，在 **“📪 退信回执判读”** 区域粘贴**完整原始
+    退信邮件**（含 MIME 正文，可点“填入示例”查看一封含 4 个收件人报告块、
+    覆盖成功 / 暂缓 / 永久失败 / 待核对四种判定的退信），点击
+    **判读退信回执**：页面顶部给出收件人报告块总数与四种判定各自的计数，
+    其下按原文顺序逐块展示每个收件人的 `Final-Recipient` / `Action` /
+    `Status` / `Diagnostic-Code` 原文与判定结果；待核对的块逐条列出原因
+    （如“Action 为 failed（应对应 5.x），与 Status 2.0.0（2.x 类别）矛盾”）。
+    没有 `message/delivery-status` 部分时给出明确错误提示。
 
 慢段归因的聚合口径：
 
@@ -789,6 +807,75 @@ curl -s -X POST http://localhost:8000/api/analyze/sender-alignment \
 - 状态码约定：空名单、非法 `mode`、宽松模式缺 `org_domain`、组织域非法、
   空白头部或超过 `MAX_INPUT_KB` 上限返回 **400**；三种对齐结论均为 200。
 
+退信回执判读（本地启动后地址为 `http://localhost:8000/api/dsn/inspect`，
+端口随 `HOST_PORT` 变化，见下文“访问端口”）。接收 `source` 字符串——
+**完整原始邮件**（含 MIME 正文），只读取其中的
+`message/delivery-status` 部分：
+
+```bash
+curl -s -X POST http://localhost:8000/api/dsn/inspect \
+  -H 'Content-Type: application/json' \
+  -d '{"source": "From: MAILER-DAEMON@mx.example\nContent-Type: multipart/report; report-type=delivery-status; boundary=BB\n\n--BB\nContent-Type: text/plain\n\nhuman readable\n--BB\nContent-Type: message/delivery-status\n\nReporting-MTA: dns; mx.example\n\nFinal-Recipient: rfc822; alice@dest.example\nAction: failed\nStatus: 5.1.1\nDiagnostic-Code: smtp; 550 5.1.1 User unknown\n\n--BB--"}'
+```
+
+返回结构与页面共用同一结果（`recipients` 按收件人报告块**原有顺序**，
+每块独立判定，整封回执**不归为单一结果**）：
+
+```json
+{
+  "part_count": 1,
+  "recipient_count": 2,
+  "success_count": 0,
+  "transient_count": 0,
+  "permanent_count": 1,
+  "review_count": 1,
+  "recipients": [
+    {
+      "index": 1,
+      "part_index": 1,
+      "block_index": 1,
+      "final_recipient": "rfc822; alice@dest.example",
+      "final_recipient_address": "alice@dest.example",
+      "action": "failed",
+      "status": "5.1.1",
+      "status_class": 5,
+      "diagnostic_code": "smtp; 550 5.1.1 User unknown",
+      "verdict": "permanent",
+      "verdict_label": "永久失败",
+      "reasons": []
+    },
+    {
+      "index": 2,
+      "part_index": 1,
+      "block_index": 2,
+      "final_recipient": "rfc822; dave@conflict.example",
+      "final_recipient_address": "dave@conflict.example",
+      "action": "failed",
+      "status": "2.0.0",
+      "status_class": 2,
+      "diagnostic_code": "smtp; 250 2.0.0 Ok but flagged failed by filter",
+      "verdict": "review",
+      "verdict_label": "待核对",
+      "reasons": ["Action 为 failed（应对应 5.x），与 Status 2.0.0（2.x 类别）矛盾"]
+    }
+  ],
+  "notice": "每个收件人报告块按各自 Status 类别独立判定，整封回执不归为单一结果；……"
+}
+```
+
+- 判定口径：`verdict` 为 `success`（Status 2.x，成功）/ `transient`
+  （4.x，暂缓）/ `permanent`（5.x，永久失败）/ `review`（待核对）；
+  `Status` 缺失、不是三段数字、类别码不在 2/4/5，或类别与 `Action`
+  （delivered→2、delayed→4、failed→5；relayed / expanded 不做矛盾检查）
+  矛盾时标为 `review` 并在 `reasons` 中逐条说明。
+- `part_index` / `block_index` 分别指第几个 `message/delivery-status`
+  部分与该部分内第几个收件人报告块（嵌套退信中可能有多个部分）；
+  `final_recipient_address` 是 `Final-Recipient` 分号后的地址部分，
+  便于展示。
+- 输入限制与其他接口一致：`source` 必须是字符串，空白输入或超过
+  `MAX_INPUT_KB` 上限返回 400；邮件中**没有** `message/delivery-status`
+  部分、或该部分中没有收件人报告块时返回 **400** 及明确 `error` 说明。
+
 健康检查：`GET http://localhost:8000/healthz`。
 
 ---
@@ -873,13 +960,14 @@ python -m unittest discover -s tests -v
 │       ├── trust.py        # 接收链可信边界：自顶端连续 by 命中、边界位置、外部交接点
 │       ├── authres.py      # 认证结果来源：AR 归属紧邻 Received、可信前缀 + authserv-id 判定
 │       ├── align.py        # 发件域对齐审计：唯一 From 域、spf/dkim pass 身份域、严格/宽松比较
-│       └── sample.py       # 页面“填入示例”数据（A / B、批量三份、会话关系、ARC、DKIM、可信边界、认证结果来源及发件域对齐示例）
+│       ├── dsn.py          # 退信回执判读：message/delivery-status 收件人报告块、Status 2/4/5 分类、Action 矛盾核对
+│       └── sample.py       # 页面“填入示例”数据（A / B、批量三份、会话关系、ARC、DKIM、可信边界、认证结果来源、发件域对齐及退信回执示例）
 ├── wsgi.py                 # gunicorn / flask 启动入口
 ├── entrypoint.sh           # 容器启动时安装依赖并启动 gunicorn
 ├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt
-└── tests/                  # 解析核心、对照、脱敏、慢段归因、会话关系、ARC 链、DKIM 覆盖、可信边界、认证结果来源与发件域对齐单元测试
+└── tests/                  # 解析核心、对照、脱敏、慢段归因、会话关系、ARC 链、DKIM 覆盖、可信边界、认证结果来源、发件域对齐与退信回执单元测试
     ├── test_parser.py
     ├── test_compare.py
     ├── test_share.py
@@ -889,7 +977,8 @@ python -m unittest discover -s tests -v
     ├── test_dkim.py
     ├── test_trust.py
     ├── test_authres.py
-    └── test_align.py
+    ├── test_align.py
+    └── test_dsn.py
 ```
 
 ## 安全与隐私

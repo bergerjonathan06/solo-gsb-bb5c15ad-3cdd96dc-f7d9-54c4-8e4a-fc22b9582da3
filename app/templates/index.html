@@ -319,6 +319,39 @@
   .from-card { border: 1px solid var(--line); }
   .from-card.bad { border-color: var(--error); }
 
+  /* 退信回执判读（DSN） */
+  .btn-dsn { background: #fbbf24; color: #422006; }
+  .dsn-list { margin-top: 10px; display: grid; gap: 10px; }
+  .dsn-row {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 12px 16px;
+  }
+  .dsn-row.v-success { border-left: 4px solid var(--ok); }
+  .dsn-row.v-transient { border-left: 4px solid var(--warn); }
+  .dsn-row.v-permanent {
+    border-left: 4px solid var(--error);
+    background: rgba(248, 113, 113, 0.08);
+  }
+  .dsn-row.v-review {
+    border-left: 4px solid var(--warn);
+    background: rgba(251, 191, 36, 0.07);
+  }
+  .dsn-badge {
+    display: inline-block; border-radius: 999px; padding: 1px 10px;
+    font-size: 12px; font-weight: 700; white-space: nowrap;
+  }
+  .dsn-badge.v-success { background: var(--ok); color: #052e1b; }
+  .dsn-badge.v-transient { background: var(--warn); color: #422006; }
+  .dsn-badge.v-permanent { background: var(--error); color: #450a0a; }
+  .dsn-badge.v-review {
+    background: var(--panel-2); color: var(--warn);
+    border: 1px solid var(--warn);
+  }
+  .dsn-diag {
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px; word-break: break-all;
+  }
+
   /* 邮件会话关系 */
   .btn-thread { background: #f472b6; color: #500724; }
   ul.thread-tree, ul.thread-tree ul {
@@ -547,6 +580,29 @@
       <button class="btn-ghost" type="button" id="fillAlignSample">填入示例</button>
       <button class="btn-ghost" type="button" id="clearAlign">清空</button>
       <span class="hint" style="align-self:center;">也可调用 <code>POST /api/analyze/sender-alignment</code>（JSON：<code>{"headers": "...", "trusted_hosts": ["..."], "org_domain": "...", "mode": "strict"}</code>）</span>
+    </div>
+  </form>
+
+  <h2 class="section-title">📪 退信回执判读（DSN / message/delivery-status）</h2>
+  <p class="subtitle" style="margin-bottom:10px;">
+    粘贴<strong>完整原始退信邮件</strong>（含 MIME 正文，如 MAILER-DAEMON 的
+    “Undelivered Mail Returned to Sender”）。系统只用标准库解析 MIME，并
+    <strong>只读取 <code>message/delivery-status</code> 部分</strong>（RFC 3464），
+    按收件人报告块原有顺序提取 <code>Final-Recipient</code> / <code>Action</code> /
+    <code>Status</code> / <code>Diagnostic-Code</code>，按 <code>Status</code>
+    类别码逐收件人判定：<strong>2.x 成功、4.x 暂缓、5.x 永久失败</strong>；
+    <code>Status</code> 缺失 / 无法解析或与 <code>Action</code> 矛盾时标为
+    <strong>待核对</strong>并说明原因。每个收件人独立判定，
+    <strong>不把整封回执归为单一结果</strong>；人读说明与原始邮件副本不参与判读。
+  </p>
+  <form method="post" action="/dsn-inspect" id="dsnForm">
+    <textarea name="source_dsn" id="source_dsn" style="min-height:240px;"
+      placeholder="粘贴完整原始退信邮件（含头部与 MIME 正文）：&#10;From: MAILER-DAEMON@mx.example&#10;Content-Type: multipart/report; report-type=delivery-status; boundary=...&#10;&#10;...&#10;Content-Type: message/delivery-status&#10;&#10;Reporting-MTA: dns; mx.example&#10;&#10;Final-Recipient: rfc822; user@dest.example&#10;Action: failed&#10;Status: 5.1.1&#10;Diagnostic-Code: smtp; 550 5.1.1 User unknown">{{ source_dsn or '' }}</textarea>
+    <div class="toolbar">
+      <button class="btn-dsn" type="submit">判读退信回执</button>
+      <button class="btn-ghost" type="button" id="fillDsnSample">填入示例</button>
+      <button class="btn-ghost" type="button" id="clearDsn">清空</button>
+      <span class="hint" style="align-self:center;">也可调用 <code>POST /api/dsn/inspect</code>（JSON：<code>{"source": "..."}</code>）</span>
     </div>
   </form>
 
@@ -1120,6 +1176,76 @@
     {% endif %}
   {% endif %}
 
+  {% if dsn %}
+    {% if dsn.error %}
+      <div class="banner">{{ dsn.error }}</div>
+    {% else %}
+      <h2 style="font-size:18px;">退信回执判读结果（逐收件人，不合并为单一结果）</h2>
+      <div class="stats">
+        <div class="stat"><div class="num">{{ dsn.recipient_count }}</div><div class="label">收件人报告块</div></div>
+        <div class="stat"><div class="num ok">{{ dsn.success_count }}</div><div class="label">成功（2.x）</div></div>
+        <div class="stat"><div class="num warn">{{ dsn.transient_count }}</div><div class="label">暂缓（4.x）</div></div>
+        <div class="stat"><div class="num {% if dsn.permanent_count %}error{% endif %}">{{ dsn.permanent_count }}</div><div class="label">永久失败（5.x）</div></div>
+        <div class="stat"><div class="num {% if dsn.review_count %}warn{% endif %}">{{ dsn.review_count }}</div><div class="label">待核对</div></div>
+        <div class="stat"><div class="num">{{ dsn.part_count }}</div><div class="label">投递状态部分</div></div>
+      </div>
+
+      <div class="dsn-list">
+        {% for r in dsn.recipients %}
+        <div class="dsn-row v-{{ r.verdict }}">
+          <div class="hop-head">
+            <span class="trust-idx">第 {{ r.index }} 块</span>
+            <span class="dsn-badge v-{{ r.verdict }}">
+              {% if r.verdict == 'success' %}✓ 成功
+              {% elif r.verdict == 'transient' %}⏳ 暂缓
+              {% elif r.verdict == 'permanent' %}⛔ 永久失败
+              {% else %}⚠ 待核对{% endif %}
+            </span>
+            <span class="hop-node" style="font-size:14.5px;">{{ r.final_recipient_address or r.final_recipient or '（未声明 Final-Recipient）' }}</span>
+            <span class="hint">投递状态部分 #{{ r.part_index }} · 块 #{{ r.block_index }}</span>
+          </div>
+          <div class="hop-grid">
+            <div><span class="k">Final-Recipient</span>
+              {% if r.final_recipient %}<code>{{ r.final_recipient }}</code>
+              {% else %}<span class="time-bad">缺失</span>{% endif %}
+            </div>
+            <div><span class="k">Action</span>
+              {% if r.action %}<code>{{ r.action }}</code>
+              {% else %}<span class="hint">缺失</span>{% endif %}
+            </div>
+            <div><span class="k">Status</span>
+              {% if r.status %}<code>{{ r.status }}</code>
+              {% else %}<span class="time-bad">缺失</span>{% endif %}
+            </div>
+          </div>
+          {% if r.diagnostic_code %}
+          <div style="margin-top:6px;"><span class="k hint">Diagnostic-Code</span>
+            <span class="dsn-diag">{{ r.diagnostic_code }}</span></div>
+          {% else %}
+          <div class="hint" style="margin-top:6px;">无 Diagnostic-Code 字段</div>
+          {% endif %}
+          {% if r.reasons %}
+          <ul class="anomalies">
+            {% for reason in r.reasons %}
+            <li class="warn">⚠ 待核对：{{ reason }}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      <p class="legend">
+        判读口径：只读取 <code>message/delivery-status</code> 部分，按收件人报告块
+        原有顺序逐块提取 <code>Final-Recipient</code> / <code>Action</code> /
+        <code>Status</code> / <code>Diagnostic-Code</code>；以 <code>Status</code>
+        类别码判定（2.x 成功、4.x 暂缓、5.x 永久失败），<code>Status</code> 缺失 /
+        无法解析或与 <code>Action</code>（delivered→2、delayed→4、failed→5）矛盾时
+        标为待核对并说明原因。每个收件人独立判定，整封回执不归为单一结果。
+      </p>
+      <p class="dkim-notice">{{ dsn.notice }}</p>
+    {% endif %}
+  {% endif %}
+
   {% if batch %}
     {% if batch.error %}
       <div class="banner">{{ batch.error }}</div>
@@ -1670,6 +1796,15 @@
     taHostsAlign.value = '';
     inputOrgDomain.value = '';
     taAlign.focus();
+  });
+
+  const taDsn = document.getElementById('source_dsn');
+  document.getElementById('fillDsnSample').addEventListener('click', () => {
+    taDsn.value = {{ sample_dsn | tojson }};
+  });
+  document.getElementById('clearDsn').addEventListener('click', () => {
+    taDsn.value = '';
+    taDsn.focus();
   });
 
   // 单封邮件脱敏分享：POST 当前“头部 A”到 /api/analyze/share，
